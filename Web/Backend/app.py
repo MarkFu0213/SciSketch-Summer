@@ -159,30 +159,29 @@ def inference():
         return jsonify({'error': 'Failed to get phrases from Hugging Face API'}), response.status_code
     
     phrases_response = response.json()
+    
+    # Extract the generated text
     if isinstance(phrases_response, dict) and 'generated_text' in phrases_response:
-        phrases = [phrases_response['generated_text']]
-    elif isinstance(phrases_response, list):
-        phrases = [item['generated_text'] for item in phrases_response if 'generated_text' in item]
+        generated_text = phrases_response['generated_text']
+    elif isinstance(phrases_response, list) and len(phrases_response) > 0 and 'generated_text' in phrases_response[0]:
+        generated_text = phrases_response[0]['generated_text']
     else:
         return jsonify({'error': 'Unexpected response format from Hugging Face API'}), 500
     
+    # Split the generated text by commas and strip whitespace
+    phrases = [phrase.strip() for phrase in generated_text.split(',') if phrase.strip()]
+    
     abstract = input_data.get('inputs')
     results = []
+    
     for phrase in phrases:
         x_pred, y_pred = predict_coordinates(abstract, phrase)
         x_denorm, y_denorm = denormalize_coordinates(x_pred, y_pred, x_min, x_max, y_min, y_max)
+        
         results.append({
-            'text': phrase,
-            'coordinates': {
-                'normalized': {
-                    'x': float(x_pred),
-                    'y': float(y_pred)
-                },
-                'denormalized': {
-                    'x': float(x_denorm),
-                    'y': float(y_denorm)
-                }
-            }
+            'phrase': phrase,
+            'x': float(x_denorm),
+            'y': float(y_denorm)
         })
     
     return jsonify({'results': results}), 200
