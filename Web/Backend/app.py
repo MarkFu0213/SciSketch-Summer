@@ -1,23 +1,32 @@
 from flask import Flask, request, jsonify
 from flask_sqlalchemy import SQLAlchemy
 from flask_cors import CORS
+from flask_migrate import Migrate
 import json
 import torch
 from transformers import T5ForConditionalGeneration, T5Tokenizer
 from huggingface_hub import HfApi
 import requests
 import time
+from Icon_RAG import *
+
 
 app = Flask(__name__)
 CORS(app)
 app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///documents.db'
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 db = SQLAlchemy(app)
+migrate = Migrate(app, db)
 
 class Document(db.Model):
     id = db.Column(db.String, primary_key=True)
     name = db.Column(db.String, nullable=False)
     content = db.Column(db.Text, nullable=False)
+
+class Diagram(db.Model):
+    id = db.Column(db.String, primary_key=True)
+    name = db.Column(db.String, nullable=False)
+    canvas_data = db.Column(db.Text, nullable=False)
     
 class T5ForCoordinateRegression(torch.nn.Module):
     def __init__(self, model_path):
@@ -81,7 +90,7 @@ with app.app_context():
 
 @app.route('/api/documents/<document_id>', methods=['GET'])
 def get_document(document_id):
-    document = db.session.get(Document, document_id)
+    document = db.session.get(Document, document_id) #the document_id is the primary key
     if document is None:
         return jsonify({"name": "Untitled Document", "content": ""})
     return jsonify({"name": document.name, "content": json.loads(document.content)})
@@ -124,6 +133,29 @@ def get_all_documents():
     documents_data = [{"id": doc.id, "content": json.loads(doc.content), "name": doc.name} for doc in documents]
     return jsonify(documents_data)
 
+@app.route('/api/diagrams/<diagram_id>', methods=['POST'])
+def save_diagram(diagram_id):
+    data = request.json
+    name = data.get('name')
+    canvas_data = data.get('canvas_data')
+    canvas_data_str = json.dumps(canvas_data)  # Convert content to JSON string
+    diagram = db.session.get(Diagram, diagram_id)
+    if diagram is None:
+        diagram = Diagram(id=diagram_id, name=name, canvas_data=canvas_data_str)
+    else:
+        diagram.name = name
+        diagram.canvas_data = canvas_data_str
+    db.session.add(diagram)
+    db.session.commit()
+    return jsonify({"status": "success"}), 200
+
+@app.route('/api/diagrams/<diagram_id>', methods=['GET'])
+def get_diagram(diagram_id):
+    diagram = db.session.get(Diagram, diagram_id)
+    if diagram is None:
+        return jsonify({"name": "untitled diagram", "canvas_data": ""})
+    return jsonify({"name": diagram.name, "canvas_data": json.loads(diagram.canvas_data)})
+
 @app.route('/predict', methods=['POST'])
 def predict():
     data = request.json
@@ -149,6 +181,11 @@ def predict():
         return jsonify(response), 200
     except Exception as e:
         return jsonify({'error': str(e)}), 500
+    
+
+# Define Google Cloud Storage settings (Public Access for now)
+bucket_name = "scisketch_icon_search"
+icon_directory = "icons"
 
 @app.route('/inference', methods=['POST'])
 def inference():
@@ -178,13 +215,23 @@ def inference():
         x_pred, y_pred = predict_coordinates(abstract, phrase)
         x_denorm, y_denorm = denormalize_coordinates(x_pred, y_pred, x_min, x_max, y_min, y_max)
         
+        # Perform icon search and generate URL
+        similar_icons = search_similar_icons_by_text(phrase, 1)
+        if similar_icons and "ids" in similar_icons:
+            icon_path = similar_icons['metadatas'][0][0]['path']
+            absolute_url = generate_gcs_url(bucket_name, os.path.join(icon_directory, os.path.basename(icon_path)))
+        else:
+            absolute_url = None
+
         results.append({
             'phrase': phrase,
             'x': float(x_denorm),
-            'y': float(y_denorm)
+            'y': float(y_denorm),
+            'icon_url': absolute_url  # added the icon url 
         })
     
     return jsonify({'results': results}), 200
 
 if __name__ == '__main__':
+    # app.run(host='localhost', port=5000, debug=True)
     app.run(debug=True)
