@@ -9,6 +9,7 @@ from requests.packages.urllib3.util.retry import Retry
 class ScienceDirectAPI:
     def __init__(self, base_url='https://api.elsevier.com/content/search/sciencedirect'):
         self.base_url = base_url
+        self.api_key ='7f59af901d2d86f78a1fd60c1bf9426a'
         self.headers = {
             'Accept': 'application/json',
             'X-ELS-APIKey': self.api_key,
@@ -17,7 +18,7 @@ class ScienceDirectAPI:
         self.session = requests.Session()
         retries = Retry(total=5, backoff_factor=1, status_forcelist=[429, 500, 502, 503, 504])
         self.session.mount('https://', HTTPAdapter(max_retries=retries))
-        self.api_key ='7f59af901d2d86f78a1fd60c1bf9426a'
+        
         self.journals = [
         "Cell",
         "Cancer Cell",
@@ -86,7 +87,7 @@ class ScienceDirectAPI:
         response.raise_for_status()
         return response.json()
 
-    def retrieve_all_results(self, query, max_workers=8):
+    def retrieve_all_results(self, query, max_workers=11):
         all_results = []
         total_results = None
 
@@ -161,7 +162,7 @@ class ScienceDirectAPI:
 
         return df
 
-    def scrape_all(self):
+    def scrape_all(self, max_workers=11):
         all_dfs = []
         for journal in self.journals:
             print(f"Starting data retrieval for {journal}...")
@@ -186,9 +187,48 @@ class ScienceDirectAPI:
         # Filter rows to keep only those with exact matches in sourceTitle
         final_df = final_df[final_df['sourceTitle'].isin(self.journals)]
 
+        # Apply the DOI API calls in a multithreaded way
+        final_df = self.apply_doi_api_multithreaded(final_df, max_workers=max_workers)
+
         return final_df
 
+    def apply_doi_api_multithreaded(self, df, max_workers=11):
+        def API_call(doi):
+            prefix = "https://api.elsevier.com/content/object/doi/"
+            postfix = '/ref/fx1/high?apiKey='
+            end = '&httpAccept=*%2F*'
+            url = prefix + doi + postfix + self.api_key + end
 
-    # Concatenate all dataframes into a single dataframe
-        final_df = pd.concat(all_dfs, ignore_index=True)
-        return final_df
+            response = requests.get(url)
+
+            if response.status_code == 200:
+                file_name = f'/Users/stevensu/Desktop/SciSketch-Summer/Graphical Abstracts/{doi}.jpg'
+                with open(file_name, 'wb') as file:
+                    file.write(response.content)
+                return True  # Graphical Abstract found
+            else:
+                return False  # Graphical Abstract not found
+
+        def process_row(row):
+            doi = row['doi']
+            row['GraphicalAbstract'] = API_call(doi)
+            return row
+
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            futures = [executor.submit(process_row, row) for _, row in df.iterrows()]
+            for future in as_completed(futures):
+                row = future.result()
+                df.loc[df['doi'] == row['doi'], 'GraphicalAbstract'] = row['GraphicalAbstract']
+
+        return df
+
+# Example usage:
+if __name__ == "__main__":
+    sd_api = ScienceDirectAPI()
+    df = sd_api.scrape_all()
+    
+    # Count the number of rows where 'GraphicalAbstract' is True
+    count_true = df['GraphicalAbstract'].sum()
+
+    # Print the count
+    print(f"Number of rows with 'GraphicalAbstract' = True: {count_true}")
