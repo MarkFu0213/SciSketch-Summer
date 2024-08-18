@@ -5,7 +5,7 @@ function App() {
   return (
     <div className="App">
       <header className="App-header">
-        <h1>My Fabric.js Webapp</h1>
+        <h1>SciSketch Test Diagram</h1>
       </header>
       <main>
         <FabricCanvas />

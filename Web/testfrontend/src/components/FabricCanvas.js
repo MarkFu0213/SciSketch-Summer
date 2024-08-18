@@ -48,7 +48,7 @@ const FabricCanvas = () => {
         canvas.remove(activeObject);
         canvas.renderAll();
       } else {
-        alert('Please select an object to delete');
+        alert('Delete');
       }
     }
   };
