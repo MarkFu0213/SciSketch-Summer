@@ -85,11 +85,13 @@ class ScienceDirectAPI:
     "Trends in Cognitive Sciences"
 ]
 
+    # Helper to get request results for single API call
     def get_results(self, query):
         response = self.session.put(self.base_url, headers=self.headers, json=query)
         response.raise_for_status()
         return response.json()
 
+    # Helper to retrieve all results for a given query
     def retrieve_all_results(self, query, max_workers=11):
         all_results = []
         total_results = None
@@ -166,6 +168,7 @@ class ScienceDirectAPI:
 
         return df
 
+    # Main method to scrape all data
     def scrape_all(self, max_workers=11):
         all_dfs = []
         for journal in self.journals:
@@ -182,7 +185,7 @@ class ScienceDirectAPI:
                     "sortBy": "date"
                 }
             }
-            df = self.retrieve_all_results(query)
+            df = self.retrieve_all_results(query, max_workers = max_workers)
             all_dfs.append(df)
 
         # Concatenate all dataframes into a single dataframe
@@ -191,48 +194,39 @@ class ScienceDirectAPI:
         # Filter rows to keep only those with exact matches in sourceTitle
         final_df = final_df[final_df['sourceTitle'].isin(self.journals)]
 
-        # Apply the DOI API calls in a multithreaded way
-        final_df = self.apply_doi_api_multithreaded(final_df, max_workers=max_workers)
-
         return final_df
 
-    def apply_doi_api_multithreaded(self, df, max_workers=11):
+    # get_graphical_abstract()
+    def get_graphical_abstract(self, df):
         def API_call(doi):
             prefix = "https://api.elsevier.com/content/object/doi/"
             postfix = '/ref/fx1/high?apiKey='
             end = '&httpAccept=*%2F*'
             url = prefix + doi + postfix + self.api_key + end
+            backoff_time = 1
 
-            try:
-                response = requests.get(url)
-                response.raise_for_status()
+            while True:
+                try:
+                    response = self.session.get(url)
+                    if response.status_code == 200:
+                        return True  # Graphical Abstract found
+                    elif response.status_code == 429:
+                        logging.warning(f"Rate limit hit. Backing off for {backoff_time} seconds...")
+                        time.sleep(backoff_time)
+                        backoff_time *= 2  # Exponential backoff
+                    else:
+                        return False  # Graphical Abstract not found
+                except requests.exceptions.RequestException as e:
+                    logging.error(f"Failed to fetch graphical abstract for DOI {doi}: {e}")
+                    return False  # Mark as failed
 
-                file_name = f'/Users/stevensu/Desktop/SciSketch-Summer/Graphical Abstracts/{doi}.jpg'
-                with open(file_name, 'wb') as file:
-                    file.write(response.content)
-                return True  # Graphical Abstract found
-
-            except requests.exceptions.RequestException as e:
-                logging.error(f"Failed to fetch graphical abstract for DOI {doi}: {e}")
-                return "failed"  # Mark as failed
-
-        def process_row(row):
-            doi = row['doi']
-            row['GraphicalAbstract'] = API_call(doi)
-            return row
-
-        # Progress bar setup
+        # Process each row sequentially
         with tqdm(total=len(df), desc="Processing DOIs", unit="doi") as pbar:
-            with ThreadPoolExecutor(max_workers=max_workers) as executor:
-                futures = [executor.submit(process_row, row) for _, row in df.iterrows()]
-                for future in as_completed(futures):
-                    try:
-                        row = future.result()
-                        df.loc[df['doi'] == row['doi'], 'GraphicalAbstract'] = row['GraphicalAbstract']
-                    except Exception as e:
-                        logging.error(f"Error processing row: {e}")
-                    finally:
-                        pbar.update(1)
+            for _, row in df.iterrows():
+                doi = row['doi']
+                result = API_call(doi)
+                df.loc[df['doi'] == doi, 'GraphicalAbstract'] = result
+                pbar.update(1)
 
         return df
 
@@ -240,10 +234,13 @@ class ScienceDirectAPI:
 if __name__ == "__main__":
     sd_api = ScienceDirectAPI()
     df = sd_api.scrape_all()
+    df = sd_api.get_graphical_abstract(df)
+    
+    # Save the dataframe to a CSV file
+    df.to_csv('output_with_graphical_abstract.csv', index=False)
     
     # Count the number of rows where 'GraphicalAbstract' is True
     count_true = df['GraphicalAbstract'].eq(True).sum()
-
-    df.to_csv('output.csv', index=False)
+    
     # Print the count
     logging.info(f"Number of rows with 'GraphicalAbstract' = True: {count_true}")
