@@ -7,8 +7,6 @@ from requests.adapters import HTTPAdapter
 from requests.packages.urllib3.util.retry import Retry
 from tqdm import tqdm
 import os
-from MySQLDatabase import MySQLConnector
-from datetime import date
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
@@ -87,9 +85,6 @@ class ScienceDirectAPI:
     "Trends in Biotechnology",
     "Trends in Cognitive Sciences"
 ]
-        self.db = MySQLConnector()
-        today = date.today()
-        self.date = today.strftime('%Y-%m-%d')
 
     def get_results(self, query):
         response = self.session.put(self.base_url, headers=self.headers, json=query)
@@ -202,11 +197,10 @@ class ScienceDirectAPI:
 
         final_df = pd.concat(all_dfs, ignore_index=True)
         final_df = final_df[final_df['sourceTitle'].isin(self.journals)]
-        self.db.upload_dataframe(final_df, self.date)
+
         return final_df
 
-    def get_graphical_abstract(self):
-        df = self.db.fetch_table(self.date)
+    def get_graphical_abstract(self, df):
         def API_call(doi):
             prefix = "https://api.elsevier.com/content/object/doi/"
             postfix = '/ref/fx1/high?apiKey='
@@ -222,8 +216,8 @@ class ScienceDirectAPI:
                     elif response.status_code == 429:
                         retry_after = response.headers.get('Retry-After', backoff_time)
                         logging.warning(f"Rate limit hit. Backing off for {retry_after} seconds...")
-                        time.sleep(int(retry_after))  # Use Retry-After header if available
-                        backoff_time = min(backoff_time * 2, 3600)  # Exponential backoff with max cap of 1 hour
+                        time.sleep(int(retry_after))
+                        backoff_time = min(backoff_time * 2, 3600)  # Cap backoff time to 1 hour
                     else:
                         return (doi, False)  # Graphical Abstract not found
                 except requests.exceptions.RequestException as e:
@@ -245,14 +239,13 @@ class ScienceDirectAPI:
                     pbar.update(1)
         
         df['GraphicalAbstract'] = df['doi'].map(results)
-        self.db.upload_dataframe(df, self.date)
         return df
 
 # Example usage:
 if __name__ == "__main__":
     sd_api = ScienceDirectAPI()
     df = sd_api.scrape_all()
-    df = sd_api.get_graphical_abstract()
+    df = sd_api.get_graphical_abstract(df)
     
     # Save the dataframe to a CSV file
     df.to_csv('output_with_graphical_abstract.csv', index=False)

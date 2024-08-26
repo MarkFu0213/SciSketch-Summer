@@ -46,22 +46,25 @@ class MySQLConnector:
         try:
             with self.connection.cursor() as cursor:
                 # Generate the SQL statement for creating a table
-                columns = ', '.join(f"`{col}` VARCHAR(255)" for col in df.columns)
+                columns = ', '.join(f"`{col}` TEXT" for col in df.columns)
                 create_table_sql = f"CREATE TABLE IF NOT EXISTS `{table_name}` ({columns});"
                 cursor.execute(create_table_sql)
 
+                # Prepare the SQL statement for inserting rows
+                placeholders = ', '.join(['%s'] * len(df.columns))
+                insert_sql = f"INSERT INTO `{table_name}` VALUES ({placeholders});"
+
                 # Insert DataFrame rows into the table
                 for _, row in df.iterrows():
-                    values = ', '.join(f"'{str(val)}'" for val in row)
-                    insert_row_sql = f"INSERT INTO `{table_name}` VALUES ({values});"
-                    cursor.execute(insert_row_sql)
+                    cursor.execute(insert_sql, tuple(row))
 
                 # Commit the transaction
                 self.connection.commit()
-                print(f"DataFrame uploaded successfully to the table `{table_name}`.")
+                print(f"DataFrame uploaded successfully to the table {table_name}.")
         except pymysql.MySQLError as e:
             print(f"Error uploading DataFrame to MySQL: {e}")
             self.connection.rollback()
+
     def list_tables(self):
         """
         Retrieves and returns a list of all table names in the connected database.
@@ -92,6 +95,21 @@ class MySQLConnector:
             print(f"Error previewing table `{table_name}`: {e}")
             return pd.DataFrame()
 
+    def fetch_table(self, table_name):
+        """
+        Retrieves the entire content of a specified table.
+        :param table_name: Name of the table to retrieve
+        :return: Pandas DataFrame containing the entire table
+        """
+        try:
+            query = f"SELECT * FROM `{table_name}`;"
+            df = pd.read_sql(query, self.connection)
+            return df
+        except pymysql.MySQLError as e:
+            print(f"Error fetching table `{table_name}`: {e}")
+            return pd.DataFrame()
+
+
     def __del__(self):
         """Ensures the connection is closed when the object is deleted."""
         self.close_connection()
@@ -113,6 +131,6 @@ if __name__ == "__main__":
     print("Tables in the database:", tables)
 
     # Preview the content of a specified table
-    preview_df = db_connector.preview_table("new_table_name")
-    print("Preview of the table 'new_table_name':")
+    preview_df = db_connector.preview_table("2024-08-26")
+    print("Preview of the table '2024-08-26':")
     print(preview_df)
