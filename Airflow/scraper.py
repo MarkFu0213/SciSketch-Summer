@@ -182,6 +182,13 @@ class ScienceDirectAPI:
 
     def scrape_all(self):
         for journal in self.journals:
+            table_name = f"{journal.replace(' ', '_')}_{self.date.replace('-', '_')}"
+            
+            # Check if the table already exists
+            if self.db.table_exists(table_name):
+                logging.info(f"Table {table_name} already exists. Skipping scraping for {journal}.")
+                continue
+            
             logging.info(f"Starting data retrieval for {journal}...")
             query = {
                 "qs": "a OR b OR c OR d OR e OR f OR g OR h OR i OR j OR k OR l OR m OR n OR o OR p OR q OR r OR s OR t OR u OR v OR w OR x OR y OR z",
@@ -197,10 +204,8 @@ class ScienceDirectAPI:
             }
             df = self.retrieve_all_results(query)
             df = df[df['sourceTitle'] == journal]  # Ensure we only have results for this journal
-            table_name = f"{journal.replace(' ', '_')}_{self.date.replace('-', '_')}"
             self.db.upload_dataframe(df, table_name)
             logging.info(f"Uploaded data for {journal} to table {table_name}")
-
     def get_graphical_abstract(self):
         tables = self.db.list_tables()
         today_tables = [table for table in tables if self.date.replace('-', '_') in table]

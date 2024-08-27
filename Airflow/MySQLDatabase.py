@@ -133,6 +133,22 @@ class MySQLConnector:
             print(f"Error fetching table `{table_name}`: {e}")
             return pd.DataFrame()
 
+    def table_exists(self, table_name):
+        """
+        Checks if a table exists in the database.
+        :param table_name: Name of the table to check
+        :return: Boolean indicating whether the table exists
+        """
+        try:
+            with self.connection.cursor() as cursor:
+                query = f"SHOW TABLES LIKE '{table_name}'"
+                cursor.execute(query)
+                result = cursor.fetchone()
+            return result is not None
+        except pymysql.MySQLError as e:
+            print(f"Error checking if table exists: {e}")
+            return False
+
     def __del__(self):
         """Ensures the connection is closed when the object is deleted."""
         self.close_connection()
