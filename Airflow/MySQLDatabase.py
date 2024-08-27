@@ -1,5 +1,7 @@
 import pymysql
 import pandas as pd
+import time
+import logging
 
 class MySQLConnector:
     def __init__(self):
@@ -37,33 +39,55 @@ class MySQLConnector:
             self.connection.close()
             print("Connection closed.")
 
-    def upload_dataframe(self, df, table_name):
+    def upload_dataframe(self, df, table_name, max_retries=3, delay=5):
         """
-        Uploads a Pandas DataFrame to a new table in the MySQL database.
+        Uploads a Pandas DataFrame to a new table in the MySQL database, allowing NULL values.
         :param df: Pandas DataFrame to upload
         :param table_name: Name of the new table to create in the database
+        :param max_retries: Maximum number of retry attempts
+        :param delay: Delay between retries in seconds
         """
-        try:
-            with self.connection.cursor() as cursor:
-                # Generate the SQL statement for creating a table
-                columns = ', '.join(f"`{col}` TEXT" for col in df.columns)
-                create_table_sql = f"CREATE TABLE IF NOT EXISTS `{table_name}` ({columns});"
-                cursor.execute(create_table_sql)
+        for attempt in range(max_retries):
+            try:
+                with self.connection.cursor() as cursor:
+                    # Check if table exists
+                    cursor.execute(f"SHOW TABLES LIKE '{table_name}';")
+                    table_exists = cursor.fetchone() is not None
 
-                # Prepare the SQL statement for inserting rows
-                placeholders = ', '.join(['%s'] * len(df.columns))
-                insert_sql = f"INSERT INTO `{table_name}` VALUES ({placeholders});"
+                    if not table_exists:
+                        # Generate the SQL statement for creating a table
+                        columns = ', '.join(f"`{col}` TEXT" for col in df.columns)
+                        create_table_sql = f"CREATE TABLE IF NOT EXISTS `{table_name}` ({columns});"
+                        cursor.execute(create_table_sql)
+                    else:
+                        # If table exists, drop it and recreate
+                        cursor.execute(f"DROP TABLE `{table_name}`;")
+                        columns = ', '.join(f"`{col}` TEXT" for col in df.columns)
+                        create_table_sql = f"CREATE TABLE `{table_name}` ({columns});"
+                        cursor.execute(create_table_sql)
 
-                # Insert DataFrame rows into the table
-                for _, row in df.iterrows():
-                    cursor.execute(insert_sql, tuple(row))
+                    # Prepare the SQL statement for inserting rows
+                    placeholders = ', '.join(['%s'] * len(df.columns))
+                    insert_sql = f"INSERT INTO `{table_name}` VALUES ({placeholders});"
 
-                # Commit the transaction
-                self.connection.commit()
-                print(f"DataFrame uploaded successfully to the table {table_name}.")
-        except pymysql.MySQLError as e:
-            print(f"Error uploading DataFrame to MySQL: {e}")
-            self.connection.rollback()
+                    # Insert DataFrame rows into the table
+                    for _, row in df.iterrows():
+                        values = [None if pd.isna(value) else value for value in row]
+                        cursor.execute(insert_sql, tuple(values))
+
+                    # Commit the transaction
+                    self.connection.commit()
+                    print(f"DataFrame uploaded successfully to the table {table_name}.")
+                    return
+            except pymysql.MySQLError as e:
+                print(f"Attempt {attempt + 1} failed: {str(e)}")
+                if attempt < max_retries - 1:
+                    print(f"Retrying in {delay} seconds...")
+                    time.sleep(delay)
+                    self.connect()  # Reconnect to the database
+                else:
+                    print("Max retries reached. Upload failed.")
+                    raise
 
     def list_tables(self):
         """
@@ -109,28 +133,22 @@ class MySQLConnector:
             print(f"Error fetching table `{table_name}`: {e}")
             return pd.DataFrame()
 
+    def table_exists(self, table_name):
+        """
+        Checks if a table exists in the database.
+        :param table_name: Name of the table to check
+        :return: Boolean indicating whether the table exists
+        """
+        try:
+            with self.connection.cursor() as cursor:
+                query = f"SHOW TABLES LIKE '{table_name}'"
+                cursor.execute(query)
+                result = cursor.fetchone()
+            return result is not None
+        except pymysql.MySQLError as e:
+            print(f"Error checking if table exists: {e}")
+            return False
 
     def __del__(self):
         """Ensures the connection is closed when the object is deleted."""
         self.close_connection()
-
-# Example usage
-if __name__ == "__main__":
-    # Initialize the MySQLConnector (connection details are hardcoded)
-    db_connector = MySQLConnector()
-
-    # Example DataFrame
-    data = {'column1': ['value1', 'value2'], 'column2': ['value3', 'value4']}
-    df = pd.DataFrame(data)
-
-    # Upload DataFrame to a new table
-    db_connector.upload_dataframe(df, "new_table_name")
-
-     # List all tables in the database
-    tables = db_connector.list_tables()
-    print("Tables in the database:", tables)
-
-    # Preview the content of a specified table
-    preview_df = db_connector.preview_table("2024-08-26")
-    print("Preview of the table '2024-08-26':")
-    print(preview_df)
